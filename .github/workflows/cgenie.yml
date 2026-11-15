@@ -9,6 +9,11 @@ on:
         required: false
         default: "0"
 
+env:
+  # cGENIE 的 makefile 把 GENIE_ROOT 写死成 $HOME/cgenie.muffin，
+  # 所以必须把源码放到 HOME 下，而不是工作区里。
+  GENIE_HOME: /home/runner/cgenie.muffin
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -23,68 +28,68 @@ jobs:
           sudo apt-get install -y -qq gfortran libnetcdff-dev make git
           gfortran --version | head -1
           nf-config --version
-          echo "netcdf mod: $(nf-config --includedir)"
+          echo "mod: $(nf-config --includedir)"
 
-      - name: 缓存 cGENIE 源码
-        id: cache-src
+      - name: 缓存源码
+        id: cache
         uses: actions/cache@v4
         with:
-          path: cgenie.muffin
-          key: cgenie-src-v1
+          path: /home/runner/cgenie.muffin
+          key: cgenie-src-v2
 
-      - name: 获取源码
-        if: steps.cache-src.outputs.cache-hit != 'true'
+      - name: 获取源码到 \$HOME/cgenie.muffin
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 https://github.com/derpycode/cgenie.muffin.git
-          du -sh cgenie.muffin
+          rm -rf "$GENIE_HOME"
+          git clone --depth 1 https://github.com/derpycode/cgenie.muffin.git "$GENIE_HOME"
+          du -sh "$GENIE_HOME"
 
       - name: 修补 Python2 脚本
         run: |
-          sed -i 's/^\(\s*\)print \(.*\)$/\1print(\2)/' cgenie.muffin/genie-main/finc.py
-          grep -n "print(" cgenie.muffin/genie-main/finc.py | head -3 || true
+          sed -i 's/^\(\s*\)print \(.*\)$/\1print(\2)/' "$GENIE_HOME/genie-main/finc.py"
+          grep -n "print(" "$GENIE_HOME/genie-main/finc.py" | head -3 || true
 
       - name: 编译 muffin
         run: |
-          cd cgenie.muffin/genie-main
+          cd "$GENIE_HOME/genie-main"
           make clean > /dev/null 2>&1 || true
-          make NETCDF_DIR=/usr NETCDF_NAME=netcdff 2>&1 | tail -30
+          make GENIE_ROOT="$GENIE_HOME" NETCDF_DIR=/usr NETCDF_NAME=netcdff 2>&1 | tail -40
           ls -lh genie.exe
-          echo "BUILD_OK=1" >> $GITHUB_ENV
+          echo "BUILD_OK=1" >> "$GITHUB_ENV"
 
-      - name: 检查 320 Ma 古地理数据
+      - name: 检查古地理数据
         run: |
-          ls cgenie.muffin/genie-paleo | grep -E "^(300|320|340|360)" || true
-          ls -lh cgenie.muffin/genie-paleo/320ebP2_/ | head -12
+          ls "$GENIE_HOME/genie-paleo" | grep -E "^(300|320|340|360)" || true
+          ls -lh "$GENIE_HOME/genie-paleo/320ebP2_/" | head -10
 
       - name: 生成 320 Ma 配置
         run: |
+          export GENIE_HOME=/home/runner/cgenie.muffin
           bash scripts/make_config.sh
 
       - name: 试运行（可选）
         if: ${{ github.event.inputs.run_years != '0' && github.event.inputs.run_years != '' }}
         continue-on-error: true
         run: |
-          cd cgenie.muffin/genie-main
-          YEARS=${{ github.event.inputs.run_years }}
+          cd "$GENIE_HOME/genie-main"
+          export GENIE_ROOT="$GENIE_HOME"
           mkdir -p "$HOME/cgenie_output"
-          ./runmuffin.sh p0320c BASES RUN330 $YEARS 2>&1 | tail -40 || true
+          ./runmuffin.sh p0320c BASES RUN330 ${{ github.event.inputs.run_years }} 2>&1 | tail -50 || true
           ls -lh "$HOME/cgenie_output" || true
 
-      - name: 打包产物
+      - name: 收集产物
         if: always()
         run: |
           mkdir -p out
-          cp cgenie.muffin/genie-main/genie.exe out/ 2>/dev/null || true
-          cp -r cgenie.muffin/genie-main/configs out/ 2>/dev/null || true
+          cp "$GENIE_HOME/genie-main/genie.exe" out/ 2>/dev/null || true
+          cp -r "$GENIE_HOME/genie-main/configs" out/ 2>/dev/null || true
           cp -r "$HOME/cgenie_output" out/ 2>/dev/null || true
-          tar -czf cgenie-build-$(date +%Y%m%d).tar.gz out 2>/dev/null || true
-          ls -lh
+          ls -lh out || true
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: cgenie-build
-          path: |
-            cgenie-build-*.tar.gz
-            out/genie.exe
+          path: out/
           if-no-files-found: warn
+
