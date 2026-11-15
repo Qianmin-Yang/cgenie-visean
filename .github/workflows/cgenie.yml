@@ -1,52 +1,75 @@
-name: build-cgenie
+name: build-and-run-cgenie
 
 on:
   push:
   workflow_dispatch:
+    inputs:
+      years:
+        description: "积分年数"
+        required: false
+        default: "200"
+
+env:
+  GENIE_HOME: /home/runner/cgenie.muffin
 
 jobs:
-  build:
+  run:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 300
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: 1. 安装 gfortran + netCDF-Fortran
+      - name: 1. 工具链
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq gfortran libnetcdff-dev make git
+          sudo apt-get install -y -qq gfortran libnetcdff-dev make git bc
           gfortran --version | head -1
-          nf-config --version
 
-      - name: 2. 克隆 cGENIE
+      - name: 2. 克隆到 \$HOME/cgenie.muffin
         run: |
-          git clone --depth 1 https://github.com/derpycode/cgenie.muffin.git
-          ls cgenie.muffin/genie-lib/libnc1 | head -3
+          git clone --depth 1 https://github.com/derpycode/cgenie.muffin.git "$GENIE_HOME"
+          ls "$GENIE_HOME/genie-lib/libnc1" | head -2
 
-      - name: 3. 修补 Python2 脚本
-        run: |
-          sed -i 's/^\(\s*\)print \(.*\)$/\1print(\2)/' cgenie.muffin/genie-main/finc.py
-          grep -n "print(" cgenie.muffin/genie-main/finc.py | head -3 || true
+      - name: 3. Python2 补丁
+        run: sed -i 's/^\(\s*\)print \(.*\)$/\1print(\2)/' "$GENIE_HOME/genie-main/finc.py"
 
-      - name: 4. 编译（36x36 网格 + 正确 netCDF 库名）
+      - name: 4. 编译（36x36）
         run: |
-          cd cgenie.muffin/genie-main
+          cd "$GENIE_HOME/genie-main"
           make clean > /dev/null 2>&1 || true
-          make GENIE_ROOT="$GITHUB_WORKSPACE/cgenie.muffin" \
+          make GENIE_ROOT="$GENIE_HOME" \
                GENIE_FFLAGS="-DGENIENX=36 -DGENIENY=36 -DGENIENL=1" \
                NETCDF_DIR=/usr NETCDF_NAME=netcdf NETCDF_NAMEF=netcdff \
-               2>&1 | tail -40
+               2>&1 | tail -25
           ls -lh genie.exe
 
-      - name: 5. 检查古地理数据
+      - name: 5. 生成 320 Ma 配置 + 用户配置
         run: |
-          ls cgenie.muffin/genie-paleo | grep -E "^(300|320|340|360)" || true
+          cd "$GENIE_HOME/genie-main"
+          cp configs/*p0251b*.config configs/p0320c.config
+          sed -i 's/p0251b/320ebP2_/g' configs/p0320c.config
+          sed -i 's/^ini_pCO2[[:space:]]*=.*/ini_pCO2=560/'   configs/p0320c.config
+          sed -i 's/^solconst[[:space:]]*=.*/solconst=1338/'   configs/p0320c.config
+          mkdir -p genie-userconfigs/VISEAN
+          printf 'ea_36=y\n' > genie-userconfigs/VISEAN/RUN330
+          echo p0320c > current_config.dat
+          grep -nE "320ebP2_|ini_pCO2|solconst" configs/p0320c.config | head -6
 
-      - name: 6. 上传 genie.exe
+      - name: 6. 运行模型
+        continue-on-error: true
+        run: |
+          cd "$GENIE_HOME/genie-main"
+          ./runmuffin.sh p0320c VISEAN RUN330 ${{ github.event.inputs.years || '200' }} 2>&1 | tail -60
+          echo "---- output ----"
+          ls -lhR "$HOME/cgenie_output" 2>/dev/null | head -30 || true
+
+      - name: 7. 上传结果
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: genie-exe
-          path: cgenie.muffin/genie-main/genie.exe
+          name: cgenie-output
+          path: |
+            /home/runner/cgenie_output/
+            /home/runner/cgenie.muffin/genie-main/genie.exe
           if-no-files-found: warn
