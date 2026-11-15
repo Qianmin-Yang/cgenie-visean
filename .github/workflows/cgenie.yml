@@ -22,20 +22,21 @@ jobs:
       - name: 2. 克隆 cGENIE
         run: |
           git clone --depth 1 https://github.com/derpycode/cgenie.muffin.git
-          echo "checkout root = $GITHUB_WORKSPACE"
-          ls "$GITHUB_WORKSPACE/cgenie.muffin/genie-lib/libnc1" | head -3
+          ls cgenie.muffin/genie-lib/libnc1 | head -3
 
       - name: 3. 修补 Python2 脚本
         run: |
           sed -i 's/^\(\s*\)print \(.*\)$/\1print(\2)/' cgenie.muffin/genie-main/finc.py
           grep -n "print(" cgenie.muffin/genie-main/finc.py | head -3 || true
 
-      - name: 4. 编译（GENIE_ROOT 指向本次 checkout）
+      - name: 4. 编译（36x36 网格 + 正确 netCDF 库名）
         run: |
           cd cgenie.muffin/genie-main
           make clean > /dev/null 2>&1 || true
           make GENIE_ROOT="$GITHUB_WORKSPACE/cgenie.muffin" \
-               NETCDF_DIR=/usr NETCDF_NAME=netcdff 2>&1 | tail -40
+               GENIE_FFLAGS="-DGENIENX=36 -DGENIENY=36 -DGENIENL=1" \
+               NETCDF_DIR=/usr NETCDF_NAME=netcdf NETCDF_NAMEF=netcdff \
+               2>&1 | tail -40
           ls -lh genie.exe
 
       - name: 5. 检查古地理数据
@@ -49,4 +50,3 @@ jobs:
           name: genie-exe
           path: cgenie.muffin/genie-main/genie.exe
           if-no-files-found: warn
-
