@@ -47,7 +47,11 @@ jobs:
       - name: 5. 生成 320 Ma 配置 + 用户配置
         run: |
           cd "$GENIE_HOME/genie-main"
-          cp configs/*p0251b*.config configs/p0320c.config
+          # 注意：*p0251b* 会匹配到 8 个文件，必须精确指定一个
+          TMPL=$(ls configs/cgenie.eb_go_gs_ac_bg.p0251b.BASES.config 2>/dev/null | head -1)
+          if [ -z "$TMPL" ]; then TMPL=$(ls configs/*p0251b.BASES.config | head -1); fi
+          echo "模板: $TMPL"
+          cp "$TMPL" configs/p0320c.config
           sed -i 's/p0251b/320ebP2_/g' configs/p0320c.config
           sed -i 's/^ini_pCO2[[:space:]]*=.*/ini_pCO2=560/'   configs/p0320c.config
           sed -i 's/^solconst[[:space:]]*=.*/solconst=1338/'   configs/p0320c.config
