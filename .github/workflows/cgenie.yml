@@ -1,1 +1,90 @@
+name: Build cGENIE (muffin)
 
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      run_years:
+        description: "积分年数（0 = 只编译不运行）"
+        required: false
+        default: "0"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装工具链
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gfortran libnetcdff-dev make git
+          gfortran --version | head -1
+          nf-config --version
+          echo "netcdf mod: $(nf-config --includedir)"
+
+      - name: 缓存 cGENIE 源码
+        id: cache-src
+        uses: actions/cache@v4
+        with:
+          path: cgenie.muffin
+          key: cgenie-src-v1
+
+      - name: 获取源码
+        if: steps.cache-src.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/derpycode/cgenie.muffin.git
+          du -sh cgenie.muffin
+
+      - name: 修补 Python2 脚本
+        run: |
+          sed -i 's/^\(\s*\)print \(.*\)$/\1print(\2)/' cgenie.muffin/genie-main/finc.py
+          grep -n "print(" cgenie.muffin/genie-main/finc.py | head -3 || true
+
+      - name: 编译 muffin
+        run: |
+          cd cgenie.muffin/genie-main
+          make clean > /dev/null 2>&1 || true
+          make NETCDF_DIR=/usr NETCDF_NAME=netcdff 2>&1 | tail -30
+          ls -lh genie.exe
+          echo "BUILD_OK=1" >> $GITHUB_ENV
+
+      - name: 检查 320 Ma 古地理数据
+        run: |
+          ls cgenie.muffin/genie-paleo | grep -E "^(300|320|340|360)" || true
+          ls -lh cgenie.muffin/genie-paleo/320ebP2_/ | head -12
+
+      - name: 生成 320 Ma 配置
+        run: |
+          bash scripts/make_config.sh
+
+      - name: 试运行（可选）
+        if: ${{ github.event.inputs.run_years != '0' && github.event.inputs.run_years != '' }}
+        continue-on-error: true
+        run: |
+          cd cgenie.muffin/genie-main
+          YEARS=${{ github.event.inputs.run_years }}
+          mkdir -p "$HOME/cgenie_output"
+          ./runmuffin.sh p0320c BASES RUN330 $YEARS 2>&1 | tail -40 || true
+          ls -lh "$HOME/cgenie_output" || true
+
+      - name: 打包产物
+        if: always()
+        run: |
+          mkdir -p out
+          cp cgenie.muffin/genie-main/genie.exe out/ 2>/dev/null || true
+          cp -r cgenie.muffin/genie-main/configs out/ 2>/dev/null || true
+          cp -r "$HOME/cgenie_output" out/ 2>/dev/null || true
+          tar -czf cgenie-build-$(date +%Y%m%d).tar.gz out 2>/dev/null || true
+          ls -lh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cgenie-build
+          path: |
+            cgenie-build-*.tar.gz
+            out/genie.exe
+          if-no-files-found: warn
